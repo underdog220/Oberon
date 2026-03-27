@@ -45,6 +45,9 @@ dependencies {
     // PostgreSQL JDBC Driver
     implementation("org.postgresql:postgresql:42.7.3")
 
+    // JWT (Token-Ausstellung + Verifizierung)
+    implementation("com.auth0:java-jwt:4.4.0")
+
     // Logging
     implementation("ch.qos.logback:logback-classic:1.5.6")
 

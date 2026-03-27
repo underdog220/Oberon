@@ -1,5 +1,7 @@
 package com.devloop.oberon
 
+import com.devloop.oberon.auth.OberonAuthService
+import com.devloop.oberon.auth.authRoutes
 import com.devloop.oberon.database.DatabaseBroker
 import com.devloop.oberon.database.databaseRoutes
 import com.devloop.oberon.discovery.OberonBeacon
@@ -41,6 +43,10 @@ fun main() {
 
     val services = OberonPlatformServices.create(config)
 
+    // Auth-Service (JWT-Token, User-Login, App-Registrierung)
+    val authService = OberonAuthService(config)
+    log.info("Auth-Service: aktiv (JWT, App-Registration, User-Login)")
+
     // Database-Broker (zentrale DB-Verwaltung)
     val dbBroker = if (config.dbBrokerEnabled && config.dbBrokerJdbcUrl.isNotBlank()) {
         log.info("Database-Broker: AKTIV (${config.dbBrokerJdbcUrl})")
@@ -58,7 +64,7 @@ fun main() {
     // HTTP-Server (immer aktiv — Fallback)
     val httpServer = embeddedServer(Netty, port = config.port, host = config.host) {
         configurePlugins()
-        configureRouting(services, dbBroker)
+        configureRouting(services, dbBroker, authService)
     }
 
     // HTTPS-Server (parallel auf separatem Port, wenn TLS verfuegbar)
@@ -76,7 +82,7 @@ fun main() {
             // (Gleiche Konfiguration wie HTTP — Clients koennen waehlen)
             val appModule: Application.() -> Unit = {
                 configurePlugins()
-                configureRouting(services, dbBroker)
+                configureRouting(services, dbBroker, authService)
             }
             val httpsServer = embeddedServer(Netty, port = config.httpsPort, host = config.host, module = appModule)
             httpsServer.start(wait = false)
@@ -129,11 +135,19 @@ private fun Application.configurePlugins() {
     }
 }
 
-private fun Application.configureRouting(services: OberonPlatformServices, dbBroker: DatabaseBroker? = null) {
+private fun Application.configureRouting(
+    services: OberonPlatformServices,
+    dbBroker: DatabaseBroker? = null,
+    authService: OberonAuthService? = null,
+) {
     // Auth-Interceptor fuer /api/v2/* Pfade (global)
     intercept(ApplicationCallPipeline.Plugins) {
         val path = call.request.path()
         if (!path.startsWith("/api/v2")) return@intercept // Health etc. ohne Auth
+        // Auth-Endpoints brauchen keinen Token (dort wird der Token erst erstellt)
+        if (path.startsWith("/api/v2/auth/register") ||
+            path.startsWith("/api/v2/auth/login")
+        ) return@intercept
 
         val auth = call.request.header(HttpHeaders.Authorization)
         val token = call.request.header("X-DevLoop-Token")
@@ -146,20 +160,36 @@ private fun Application.configureRouting(services: OberonPlatformServices, dbBro
                 return@intercept
             }
         }
-        val result = services.tokenAuth.authenticate(bearer)
-        if (result is AuthResult.Denied) {
-            call.respondText(errorJson(result.reason).toString(), ContentType.Application.Json, HttpStatusCode.Unauthorized)
-            finish()
-            return@intercept
-        }
-        val client = (result as AuthResult.Authenticated).client
-        if (client != null) {
-            call.attributes.put(ClientAttributeKey, client)
+
+        // JWT-Verifizierung (mit Legacy-Token-Fallback)
+        if (authService != null) {
+            val claims = authService.verifyToken(bearer)
+            if (claims == null) {
+                call.respondText(errorJson("Ungueltiges oder abgelaufenes Token").toString(), ContentType.Application.Json, HttpStatusCode.Unauthorized)
+                finish()
+                return@intercept
+            }
+            // Claims fuer nachfolgende Handler bereitstellen
+            call.attributes.put(TokenClaimsKey, claims)
+        } else {
+            // Fallback: alter statischer Token-Check
+            val result = services.tokenAuth.authenticate(bearer)
+            if (result is com.devloop.platform.auth.AuthResult.Denied) {
+                call.respondText(errorJson(result.reason).toString(), ContentType.Application.Json, HttpStatusCode.Unauthorized)
+                finish()
+                return@intercept
+            }
+            val client = (result as com.devloop.platform.auth.AuthResult.Authenticated).client
+            if (client != null) {
+                call.attributes.put(ClientAttributeKey, client)
+            }
         }
     }
 
     routing {
         get("/api/health") { call.respondText("ok") }
+
+        if (authService != null) authRoutes(authService)
 
         platformRoutes(services)
         instanceRoutes(services)
@@ -196,5 +226,8 @@ private fun Application.configureRouting(services: OberonPlatformServices, dbBro
     }
 }
 
-/** Ktor AttributeKey fuer den authentifizierten Client. */
+/** Ktor AttributeKey fuer den authentifizierten Client (Legacy). */
 val ClientAttributeKey = io.ktor.util.AttributeKey<com.devloop.core.domain.model.GatewayClient>("oberonClient")
+
+/** Ktor AttributeKey fuer JWT-Token-Claims. */
+val TokenClaimsKey = io.ktor.util.AttributeKey<com.devloop.oberon.auth.TokenClaims>("tokenClaims")

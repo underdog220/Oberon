@@ -48,6 +48,15 @@ data class OberonConfig(
     val dbBrokerAdminPassword: String,
     /** Prefix fuer erstellte Datenbanken (z.B. "oberon_" → "oberon_dictopic") */
     val dbBrokerDatabasePrefix: String,
+    // Auth / JWT
+    /** Geheimer Schluessel fuer JWT-Signierung (mind. 32 Zeichen). */
+    val jwtSecret: String,
+    /** Shared Secret fuer App-Registrierung (wie WLAN-Passwort). */
+    val registrationSecret: String,
+    /** JWT-Gueltigkeitsdauer fuer Apps in Stunden. */
+    val jwtAppExpiryHours: Int,
+    /** JWT-Gueltigkeitsdauer fuer User-Sessions in Stunden. */
+    val jwtUserExpiryHours: Int,
 ) {
     /** Pfad zur persistierten Konfigurationsdatei. */
     val envFile: Path get() = dataDir.resolve("oberon.env")
@@ -97,6 +106,10 @@ data class OberonConfig(
                 dbBrokerAdminUser = resolve("OBERON_DB_BROKER_ADMIN_USER", "sa"),
                 dbBrokerAdminPassword = resolve("OBERON_DB_BROKER_ADMIN_PASSWORD", ""),
                 dbBrokerDatabasePrefix = resolve("OBERON_DB_BROKER_DB_PREFIX", "oberon_"),
+                jwtSecret = resolve("OBERON_JWT_SECRET", "oberon-dev-secret-change-in-production-min-32-chars"),
+                registrationSecret = resolve("OBERON_REGISTRATION_SECRET", "oberon-register"),
+                jwtAppExpiryHours = resolve("OBERON_JWT_APP_EXPIRY_HOURS", "24").toIntOrNull() ?: 24,
+                jwtUserExpiryHours = resolve("OBERON_JWT_USER_EXPIRY_HOURS", "8").toIntOrNull() ?: 8,
             )
         }
 
