@@ -1,0 +1,43 @@
+# SQL Server Express auf QNAP (Container Station)
+#
+# Deployment:
+# 1. QNAP Container Station oeffnen
+# 2. "Create Application" → docker-compose.yml hochladen
+# 3. Starten
+#
+# Oberon-Konfiguration (~/.oberon/oberon.env):
+#   OBERON_DB_BROKER_ENABLED=true
+#   OBERON_DB_BROKER_JDBC_URL=jdbc:sqlserver://NAS-IP:1433;encrypt=false;trustServerCertificate=true
+#   OBERON_DB_BROKER_ADMIN_USER=sa
+#   OBERON_DB_BROKER_ADMIN_PASSWORD=Oberon!Sql2026
+#
+# Mindestanforderung: 2GB RAM frei auf dem QNAP
+
+version: "3.8"
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: oberon-sqlserver
+    restart: unless-stopped
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=Oberon!Sql2026
+      - MSSQL_PID=Express
+      # Speicher begrenzen (wichtig fuer NAS)
+      - MSSQL_MEMORY_LIMIT_MB=1024
+    ports:
+      - "1433:1433"
+    volumes:
+      # Datenbank-Dateien persistent auf dem NAS speichern
+      - sqldata:/var/opt/mssql
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "Oberon!Sql2026" -Q "SELECT 1" -C -b
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  sqldata:
+    driver: local
