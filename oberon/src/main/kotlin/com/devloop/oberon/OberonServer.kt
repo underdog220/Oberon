@@ -1,5 +1,7 @@
 package com.devloop.oberon
 
+import com.devloop.oberon.database.DatabaseBroker
+import com.devloop.oberon.database.databaseRoutes
 import com.devloop.oberon.discovery.OberonBeacon
 import com.devloop.oberon.plananalyse.planRoutes
 import com.devloop.oberon.routing.*
@@ -39,6 +41,15 @@ fun main() {
 
     val services = OberonPlatformServices.create(config)
 
+    // Database-Broker (zentrale DB-Verwaltung)
+    val dbBroker = if (config.dbBrokerEnabled && config.dbBrokerJdbcUrl.isNotBlank()) {
+        log.info("Database-Broker: AKTIV (${config.dbBrokerJdbcUrl})")
+        DatabaseBroker(config)
+    } else {
+        log.info("Database-Broker: deaktiviert (OBERON_DB_BROKER_ENABLED=false oder keine JDBC-URL)")
+        null
+    }
+
     // TLS-Zertifikat vorbereiten (self-signed, automatisch generiert)
     val tlsConfig = if (config.tlsEnabled) {
         OberonTlsSetup.ensureKeyStore(config.dataDir.toFile())
@@ -47,7 +58,7 @@ fun main() {
     // HTTP-Server (immer aktiv — Fallback)
     val httpServer = embeddedServer(Netty, port = config.port, host = config.host) {
         configurePlugins()
-        configureRouting(services)
+        configureRouting(services, dbBroker)
     }
 
     // HTTPS-Server (parallel auf separatem Port, wenn TLS verfuegbar)
@@ -65,7 +76,7 @@ fun main() {
             // (Gleiche Konfiguration wie HTTP — Clients koennen waehlen)
             val appModule: Application.() -> Unit = {
                 configurePlugins()
-                configureRouting(services)
+                configureRouting(services, dbBroker)
             }
             val httpsServer = embeddedServer(Netty, port = config.httpsPort, host = config.host, module = appModule)
             httpsServer.start(wait = false)
@@ -118,7 +129,7 @@ private fun Application.configurePlugins() {
     }
 }
 
-private fun Application.configureRouting(services: OberonPlatformServices) {
+private fun Application.configureRouting(services: OberonPlatformServices, dbBroker: DatabaseBroker? = null) {
     // Auth-Interceptor fuer /api/v2/* Pfade (global)
     intercept(ApplicationCallPipeline.Plugins) {
         val path = call.request.path()
@@ -159,6 +170,7 @@ private fun Application.configureRouting(services: OberonPlatformServices) {
         adminRoutes(services)
         dsgvoRoutes(services)
         planRoutes(services)
+        databaseRoutes(dbBroker)
 
         // Admin-UI: statische Dateien aus resources/admin/
         get("/admin/{path...}") {

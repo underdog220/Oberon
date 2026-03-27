@@ -37,6 +37,17 @@ data class OberonConfig(
     val dsgvoAuditRetentionDays: Int,
     /** Session-TTL fuer Anonymisierungs-Mappings in Minuten */
     val dsgvoSessionTtlMinutes: Int,
+    // Database-Broker
+    /** Database-Broker aktiv (zentrale DB-Verwaltung fuer alle Apps) */
+    val dbBrokerEnabled: Boolean,
+    /** JDBC-URL des zentralen SQL-Servers (z.B. jdbc:sqlserver://nas.local:1433) */
+    val dbBrokerJdbcUrl: String,
+    /** Admin-User fuer den SQL-Server (darf Datenbanken/User erstellen) */
+    val dbBrokerAdminUser: String,
+    /** Admin-Passwort fuer den SQL-Server */
+    val dbBrokerAdminPassword: String,
+    /** Prefix fuer erstellte Datenbanken (z.B. "oberon_" → "oberon_dictopic") */
+    val dbBrokerDatabasePrefix: String,
 ) {
     /** Pfad zur persistierten Konfigurationsdatei. */
     val envFile: Path get() = dataDir.resolve("oberon.env")
@@ -81,6 +92,11 @@ data class OberonConfig(
                 dsgvoAlwaysAnonymize = resolve("OBERON_DSGVO_ALWAYS_ANONYMIZE", "false").toBoolean(),
                 dsgvoAuditRetentionDays = resolve("OBERON_DSGVO_AUDIT_RETENTION_DAYS", "90").toIntOrNull() ?: 90,
                 dsgvoSessionTtlMinutes = resolve("OBERON_DSGVO_SESSION_TTL_MINUTES", "60").toIntOrNull() ?: 60,
+                dbBrokerEnabled = resolve("OBERON_DB_BROKER_ENABLED", "false").toBoolean(),
+                dbBrokerJdbcUrl = resolve("OBERON_DB_BROKER_JDBC_URL", ""),
+                dbBrokerAdminUser = resolve("OBERON_DB_BROKER_ADMIN_USER", "sa"),
+                dbBrokerAdminPassword = resolve("OBERON_DB_BROKER_ADMIN_PASSWORD", ""),
+                dbBrokerDatabasePrefix = resolve("OBERON_DB_BROKER_DB_PREFIX", "oberon_"),
             )
         }
 
