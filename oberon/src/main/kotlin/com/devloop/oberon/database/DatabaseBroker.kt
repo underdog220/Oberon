@@ -10,14 +10,14 @@ import java.sql.DriverManager
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Database-Broker: Verwaltet SQL-Server-Datenbanken fuer alle Apps zentral.
+ * Database-Broker: Verwaltet PostgreSQL-Datenbanken fuer alle Apps zentral.
  *
  * Apps registrieren sich bei Oberon und bekommen automatisch:
  * - Eine eigene Datenbank (isoliert)
  * - Einen eigenen DB-User mit eingeschraenkten Rechten
  * - JDBC-Zugangsdaten
  *
- * Oberon ist der einzige mit Admin-Zugang zum SQL-Server.
+ * Oberon ist der einzige mit Admin-Zugang zum PostgreSQL-Server.
  * Apps bekommen nur Zugang zu ihrer eigenen Datenbank.
  */
 class DatabaseBroker(private val config: OberonConfig) {
@@ -62,38 +62,69 @@ class DatabaseBroker(private val config: OberonConfig) {
         log.info("DB-Broker: Provisioniere DB '$dbName' fuer App '$normalized'...")
 
         try {
+            // PostgreSQL: Datenbank und User erstellen
+            // (Muss auf der 'postgres' Default-DB ausgefuehrt werden)
             getAdminConnection().use { conn ->
-                // 1. Datenbank erstellen
-                conn.createStatement().execute("IF DB_ID('$dbName') IS NULL CREATE DATABASE [$dbName]")
-                log.info("DB-Broker: Datenbank '$dbName' erstellt (oder existiert bereits)")
+                conn.autoCommit = true
 
-                // 2. Login erstellen
-                try {
+                // 1. User erstellen (falls nicht vorhanden)
+                val userExists = conn.prepareStatement(
+                    "SELECT 1 FROM pg_roles WHERE rolname = ?"
+                ).use { ps ->
+                    ps.setString(1, dbUser)
+                    ps.executeQuery().next()
+                }
+                if (!userExists) {
                     conn.createStatement().execute(
-                        "IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = '$dbUser') " +
-                            "CREATE LOGIN [$dbUser] WITH PASSWORD = '$dbPassword', DEFAULT_DATABASE = [$dbName]"
+                        "CREATE ROLE \"$dbUser\" WITH LOGIN PASSWORD '$dbPassword'"
                     )
-                } catch (e: Exception) {
-                    // Login existiert evtl. schon — Passwort aendern
-                    conn.createStatement().execute("ALTER LOGIN [$dbUser] WITH PASSWORD = '$dbPassword'")
+                    log.info("DB-Broker: User '$dbUser' erstellt")
+                } else {
+                    conn.createStatement().execute(
+                        "ALTER ROLE \"$dbUser\" WITH PASSWORD '$dbPassword'"
+                    )
+                    log.info("DB-Broker: User '$dbUser' existiert, Passwort aktualisiert")
                 }
 
-                // 3. User in der Datenbank erstellen + Rechte
-                conn.createStatement().execute("USE [$dbName]")
-                conn.createStatement().execute(
-                    "IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = '$dbUser') " +
-                        "CREATE USER [$dbUser] FOR LOGIN [$dbUser]"
-                )
-                conn.createStatement().execute("ALTER ROLE db_datareader ADD MEMBER [$dbUser]")
-                conn.createStatement().execute("ALTER ROLE db_datawriter ADD MEMBER [$dbUser]")
-                conn.createStatement().execute("GRANT CREATE TABLE TO [$dbUser]")
-                conn.createStatement().execute("GRANT ALTER ON SCHEMA::dbo TO [$dbUser]")
+                // 2. Datenbank erstellen (falls nicht vorhanden)
+                val dbExists = conn.prepareStatement(
+                    "SELECT 1 FROM pg_database WHERE datname = ?"
+                ).use { ps ->
+                    ps.setString(1, dbName)
+                    ps.executeQuery().next()
+                }
+                if (!dbExists) {
+                    conn.createStatement().execute(
+                        "CREATE DATABASE \"$dbName\" OWNER \"$dbUser\""
+                    )
+                    log.info("DB-Broker: Datenbank '$dbName' erstellt")
+                } else {
+                    log.info("DB-Broker: Datenbank '$dbName' existiert bereits")
+                }
 
-                log.info("DB-Broker: User '$dbUser' mit Lese-/Schreib-/DDL-Rechten erstellt")
+                // 3. Rechte setzen
+                conn.createStatement().execute(
+                    "GRANT ALL PRIVILEGES ON DATABASE \"$dbName\" TO \"$dbUser\""
+                )
             }
+
+            // 4. Schema-Rechte in der neuen DB setzen
+            getConnection(dbName).use { conn ->
+                conn.autoCommit = true
+                conn.createStatement().execute(
+                    "GRANT ALL ON SCHEMA public TO \"$dbUser\""
+                )
+                conn.createStatement().execute(
+                    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO \"$dbUser\""
+                )
+                conn.createStatement().execute(
+                    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO \"$dbUser\""
+                )
+            }
+
         } catch (e: Throwable) {
             log.error("DB-Broker: Provisionierung fehlgeschlagen: ${e.message}")
-            return ProvisionResult.Error("SQL-Fehler: ${e.message}")
+            return ProvisionResult.Error("PostgreSQL-Fehler: ${e.message}")
         }
 
         // JDBC-URL fuer die App zusammenbauen
@@ -112,7 +143,7 @@ class DatabaseBroker(private val config: OberonConfig) {
         registry[normalized] = provisioned
         saveRegistry()
 
-        log.info("DB-Broker: App '$normalized' provisioniert → $dbName")
+        log.info("DB-Broker: App '$normalized' provisioniert → $dbName ($appJdbcUrl)")
         return ProvisionResult.Success(provisioned)
     }
 
@@ -127,7 +158,10 @@ class DatabaseBroker(private val config: OberonConfig) {
 
         try {
             getAdminConnection().use { conn ->
-                conn.createStatement().execute("ALTER LOGIN [${existing.username}] WITH PASSWORD = '$newPassword'")
+                conn.autoCommit = true
+                conn.createStatement().execute(
+                    "ALTER ROLE \"${existing.username}\" WITH PASSWORD '$newPassword'"
+                )
             }
         } catch (e: Throwable) {
             return ProvisionResult.Error("Rotation fehlgeschlagen: ${e.message}")
@@ -169,6 +203,7 @@ class DatabaseBroker(private val config: OberonConfig) {
 
     // ── Intern ──────────────────────────────────────────
 
+    /** Verbindung zur Admin-DB (postgres). */
     private fun getAdminConnection(): Connection {
         return DriverManager.getConnection(
             config.dbBrokerJdbcUrl,
@@ -177,18 +212,22 @@ class DatabaseBroker(private val config: OberonConfig) {
         )
     }
 
+    /** Verbindung zu einer spezifischen DB. */
+    private fun getConnection(dbName: String): Connection {
+        val baseUrl = config.dbBrokerJdbcUrl.replace(Regex("/[^/]*$"), "/$dbName")
+        return DriverManager.getConnection(
+            baseUrl,
+            config.dbBrokerAdminUser,
+            config.dbBrokerAdminPassword,
+        )
+    }
+
     private fun buildAppJdbcUrl(dbName: String): String {
-        // Basis-URL nehmen und Datenbank anhaengen
-        val base = config.dbBrokerJdbcUrl.trimEnd(';')
-        return if (base.contains("database=", ignoreCase = true)) {
-            base.replace(Regex("database=[^;]*", RegexOption.IGNORE_CASE), "database=$dbName")
-        } else {
-            "$base;database=$dbName"
-        }
+        return config.dbBrokerJdbcUrl.replace(Regex("/[^/]*$"), "/$dbName")
     }
 
     private fun generatePassword(length: Int): String {
-        val chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#\$%"
+        val chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
         val random = SecureRandom()
         return (1..length).map { chars[random.nextInt(chars.length)] }.joinToString("")
     }

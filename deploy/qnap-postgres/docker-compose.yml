@@ -1,0 +1,66 @@
+# PostgreSQL auf QNAP (Container Station)
+#
+# Deployment:
+# 1. QNAP Container Station oeffnen
+# 2. "Create Application" → docker-compose.yml hochladen
+# 3. Starten
+#
+# Oberon-Konfiguration (~/.oberon/oberon.env):
+#   OBERON_DB_BROKER_ENABLED=true
+#   OBERON_DB_BROKER_JDBC_URL=jdbc:postgresql://NAS-IP:5432/postgres
+#   OBERON_DB_BROKER_ADMIN_USER=oberon
+#   OBERON_DB_BROKER_ADMIN_PASSWORD=Oberon!Pg2026
+#
+# RAM: ~256MB (vs 2GB fuer SQL Server)
+
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: oberon-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: oberon
+      POSTGRES_PASSWORD: Oberon!Pg2026
+      POSTGRES_DB: postgres
+      # Speicher begrenzen (sinnvoll fuer NAS)
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=128MB"
+      - "-c"
+      - "max_connections=100"
+      - "-c"
+      - "work_mem=4MB"
+      - "-c"
+      - "log_statement=ddl"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oberon"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  # Optional: pgAdmin Web-UI (wie phpMyAdmin fuer PostgreSQL)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: oberon-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@oberon.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_LISTEN_PORT: 5050
+    ports:
+      - "5050:5050"
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:
+    driver: local

@@ -42,6 +42,9 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
 
+    // PostgreSQL JDBC Driver
+    implementation("org.postgresql:postgresql:42.7.3")
+
     // Logging
     implementation("ch.qos.logback:logback-classic:1.5.6")
 
