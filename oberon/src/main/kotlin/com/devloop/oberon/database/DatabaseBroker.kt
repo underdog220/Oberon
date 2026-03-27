@@ -44,11 +44,11 @@ class DatabaseBroker(private val config: OberonConfig) {
             return ProvisionResult.Error("Ungueltiger App-Name")
         }
 
-        // Schon registriert?
+        // Schon registriert? → aktuelle URL zurueckgeben (dynamisch)
         val existing = registry[normalized]
         if (existing != null) {
             log.info("DB-Broker: App '$normalized' bereits registriert (DB: ${existing.database})")
-            return ProvisionResult.Success(existing)
+            return ProvisionResult.Success(existing.copy(jdbcUrl = buildAppJdbcUrl(existing.database)))
         }
 
         if (!config.dbBrokerEnabled || config.dbBrokerJdbcUrl.isBlank()) {
@@ -195,10 +195,14 @@ class DatabaseBroker(private val config: OberonConfig) {
 
     /**
      * Gibt die Credentials fuer eine registrierte App zurueck.
+     * Die JDBC-URL wird IMMER aus der aktuellen Config berechnet —
+     * wenn die DB umzieht, reicht es Oberon umzukonfigurieren.
      */
     fun getCredentials(appName: String): ProvisionedDatabase? {
         val normalized = appName.trim().lowercase().replace(Regex("[^a-z0-9_]"), "_")
-        return registry[normalized]
+        val entry = registry[normalized] ?: return null
+        // JDBC-URL dynamisch — nicht die gespeicherte, sondern die aktuelle
+        return entry.copy(jdbcUrl = buildAppJdbcUrl(entry.database))
     }
 
     // ── Intern ──────────────────────────────────────────
