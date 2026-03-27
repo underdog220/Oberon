@@ -111,7 +111,7 @@ class OberonBeacon(
     companion object {
         /** Standard-Beacon-Port (UDP). */
         const val DEFAULT_BEACON_PORT = 17901
-        /** Standard-Broadcast-Intervall: 5 Sekunden. */
-        const val DEFAULT_INTERVAL_MS = 5000L
+        /** Standard-Broadcast-Intervall: 30 Sekunden. */
+        const val DEFAULT_INTERVAL_MS = 30_000L
     }
 }
