@@ -1,5 +1,6 @@
 package com.devloop.oberon
 
+import com.devloop.oberon.discovery.OberonBeacon
 import com.devloop.oberon.plananalyse.planRoutes
 import com.devloop.oberon.routing.*
 import com.devloop.oberon.service.OberonPlatformServices
@@ -77,6 +78,16 @@ fun main() {
     } else {
         log.info("HTTPS deaktiviert — nur HTTP auf Port ${config.port}")
     }
+
+    // Discovery-Beacon starten (UDP-Broadcast, damit Clients den Server finden)
+    val beacon = OberonBeacon(
+        serverPort = config.port,
+        httpsPort = if (config.tlsEnabled) config.httpsPort else 0,
+        token = config.token,
+        domains = config.domains,
+    )
+    beacon.start()
+    log.info("Discovery-Beacon aktiv auf UDP-Port ${OberonBeacon.DEFAULT_BEACON_PORT}")
 
     httpServer.start(wait = true)
 }
